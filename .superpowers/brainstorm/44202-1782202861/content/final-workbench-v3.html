@@ -1,0 +1,436 @@
+<style>
+  .hero {
+    margin-bottom: 18px;
+  }
+
+  .hero p {
+    max-width: 980px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .stage {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 28px;
+    padding: 20px;
+    background:
+      linear-gradient(180deg, #f7faff 0%, #eef3fb 100%);
+    box-shadow: 0 22px 40px rgba(15, 23, 42, 0.08);
+  }
+
+  .workbench {
+    position: relative;
+    min-height: 610px;
+    padding: 16px;
+    border-radius: 24px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(247, 250, 255, 0.78));
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    display: grid;
+    grid-template-columns: 122px minmax(0, 1fr) 188px;
+    gap: 14px;
+  }
+
+  .rail,
+  .table-shell,
+  .floating-modal,
+  .detail-modal {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+  }
+
+  .rail {
+    border-radius: 22px;
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .rail-title {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .rail-chip,
+  .rail-button,
+  .toggle-line,
+  .toolbar-pill,
+  .tab-chip,
+  .meta-block,
+  .detail-block {
+    border-radius: 13px;
+    background: linear-gradient(180deg, #ffffff, #f3f7fd);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+  }
+
+  .rail-chip {
+    height: 38px;
+    background: linear-gradient(135deg, #7a9dff, #5f82ff);
+  }
+
+  .rail-button {
+    height: 50px;
+  }
+
+  .table-shell {
+    position: relative;
+    border-radius: 24px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+  }
+
+  .table-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .toolbar-summary {
+    height: 40px;
+    border-radius: 14px;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    color: #3f4d63;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    background: linear-gradient(180deg, #ffffff, #f5f8fd);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+  }
+
+  .toolbar-pill {
+    width: 86px;
+    height: 40px;
+  }
+
+  .toolbar-pill.primary {
+    background: linear-gradient(135deg, #7c9fff, #6186ff);
+  }
+
+  .table-head {
+    height: 42px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background:
+      linear-gradient(90deg, rgba(226, 234, 245, 0.95) 0 9%, rgba(226, 234, 245, 0.72) 9% 17%, rgba(226, 234, 245, 0.95) 17% 24%, rgba(226, 234, 245, 0.72) 24% 31%, rgba(226, 234, 245, 0.95) 31% 39%, rgba(226, 234, 245, 0.72) 39% 47%, rgba(226, 234, 245, 0.95) 47% 56%, rgba(226, 234, 245, 0.72) 56% 65%, rgba(226, 234, 245, 0.95) 65% 74%, rgba(226, 234, 245, 0.72) 74% 84%, rgba(226, 234, 245, 0.95) 84% 100%);
+  }
+
+  .table-body {
+    flex: 1;
+    min-height: 400px;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,251,255,0.98));
+    position: relative;
+  }
+
+  .table-body::before {
+    content: "批量检测表格主区域，点击任意一行打开详情弹窗";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 24px;
+    text-align: center;
+    color: #8fa0b8;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.6;
+  }
+
+  .right-rail {
+    justify-content: space-between;
+  }
+
+  .toggle-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .toggle-line {
+    height: 18px;
+    background: rgba(226, 234, 245, 0.95);
+  }
+
+  .rail-cta {
+    height: 46px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #7c9fff, #6186ff);
+  }
+
+  .floating-modal {
+    position: absolute;
+    inset: 92px auto auto 50%;
+    transform: translateX(-50%);
+    width: 420px;
+    border-radius: 24px;
+    padding: 18px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,253,0.98));
+  }
+
+  .floating-modal h3,
+  .detail-modal h3,
+  .notes h3 {
+    margin: 0 0 12px;
+    color: #162033;
+    font-size: 18px;
+    line-height: 1.2;
+  }
+
+  .modal-row {
+    height: 44px;
+    margin-bottom: 10px;
+    border-radius: 14px;
+    background: rgba(226, 234, 245, 0.92);
+  }
+
+  .modal-help {
+    height: 62px;
+    margin-bottom: 14px;
+    border-radius: 16px;
+    background: rgba(235, 241, 249, 0.9);
+  }
+
+  .modal-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .modal-actions div {
+    height: 40px;
+    border-radius: 14px;
+    background: rgba(226, 234, 245, 0.92);
+  }
+
+  .modal-actions div:last-child {
+    background: linear-gradient(135deg, #7c9fff, #6186ff);
+  }
+
+  .detail-modal {
+    position: absolute;
+    inset: 54px 36px 54px 36px;
+    border-radius: 28px;
+    padding: 20px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.985), rgba(245,248,253,0.985));
+    backdrop-filter: blur(6px);
+    display: grid;
+    grid-template-rows: auto auto auto 1fr;
+    gap: 14px;
+  }
+
+  .detail-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .detail-close {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(226, 234, 245, 0.92);
+  }
+
+  .tab-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .tab-chip {
+    min-width: 110px;
+    height: 40px;
+  }
+
+  .tab-chip.active {
+    background: linear-gradient(135deg, #7c9fff, #6186ff);
+  }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .meta-block {
+    height: 62px;
+  }
+
+  .detail-content {
+    display: grid;
+    grid-template-columns: 1.2fr 0.9fr;
+    gap: 12px;
+    min-height: 0;
+  }
+
+  .detail-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .detail-block.large {
+    flex: 1;
+    min-height: 220px;
+  }
+
+  .detail-block.medium {
+    height: 140px;
+  }
+
+  .detail-block.small {
+    height: 92px;
+  }
+
+  .notes {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 24px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 18px 34px rgba(15, 23, 42, 0.06);
+  }
+
+  .notes ul {
+    margin: 0;
+    padding-left: 18px;
+    color: #475569;
+    line-height: 1.7;
+  }
+
+  .notes li + li {
+    margin-top: 8px;
+  }
+
+  .decision {
+    margin-top: 14px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    background: rgba(92, 124, 250, 0.08);
+    color: #324361;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+</style>
+
+<div class="hero">
+  <h2>第三版最终草图：工作台首页 + 双弹窗流程</h2>
+  <p class="subtitle">
+    这是按你刚才的选择合成的一版最终结构：主页只留大检测台，不再保留第二版那些顶部与三栏 UI。
+    扫描入口走居中弹窗，点表格行也走大详情弹窗，详情内部再用标签页切换。
+  </p>
+</div>
+
+<div class="layout">
+  <div class="stage">
+    <div class="workbench">
+      <div class="rail">
+        <div class="rail-title">左侧操作</div>
+        <div class="rail-chip"></div>
+        <div class="rail-button"></div>
+        <div class="rail-button"></div>
+        <div class="rail-button"></div>
+        <div class="rail-button"></div>
+        <div class="rail-button"></div>
+      </div>
+
+      <div class="table-shell">
+        <div class="table-toolbar">
+          <div class="toolbar-summary">累计检测 / 在线数量 / 掉线数量 / 累计用时</div>
+          <div class="toolbar-pill"></div>
+          <div class="toolbar-pill primary"></div>
+        </div>
+        <div class="table-head"></div>
+        <div class="table-body"></div>
+
+        <div class="floating-modal">
+          <h3>扫描路径弹窗</h3>
+          <div class="modal-row"></div>
+          <div class="modal-row"></div>
+          <div class="modal-help"></div>
+          <div class="modal-actions">
+            <div></div>
+            <div></div>
+          </div>
+        </div>
+
+        <div class="detail-modal">
+          <div class="detail-topbar">
+            <h3>检测详情弹窗</h3>
+            <div class="detail-close"></div>
+          </div>
+          <div class="tab-row">
+            <div class="tab-chip active"></div>
+            <div class="tab-chip"></div>
+            <div class="tab-chip"></div>
+            <div class="tab-chip"></div>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-block"></div>
+            <div class="meta-block"></div>
+            <div class="meta-block"></div>
+            <div class="meta-block"></div>
+          </div>
+          <div class="detail-content">
+            <div class="detail-column">
+              <div class="detail-block large"></div>
+              <div class="detail-block small"></div>
+            </div>
+            <div class="detail-column">
+              <div class="detail-block medium"></div>
+              <div class="detail-block large"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rail right-rail">
+        <div>
+          <div class="rail-title">检测配置</div>
+          <div class="toggle-stack">
+            <div class="toggle-line"></div>
+            <div class="toggle-line"></div>
+            <div class="toggle-line"></div>
+            <div class="toggle-line"></div>
+            <div class="toggle-line"></div>
+            <div class="toggle-line"></div>
+          </div>
+        </div>
+        <div class="rail-cta"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h3>当前设计决定</h3>
+    <ul>
+      <li>第二版顶部横幅、路径栏、统计卡片、下方三栏列表全部移除。</li>
+      <li>首页只保留工作台三段式结构：左操作栏、中间大表格、右配置栏。</li>
+      <li>扫描入口不直接摆在首页里，而是由顶部动作触发居中弹窗。</li>
+      <li>表格点击行后打开“大详情弹窗”，不再占用首页固定空间。</li>
+      <li>详情弹窗内部用标签页承载 `账号总览 / 候选文件 / 解析结果 / 原始数据`。</li>
+    </ul>
+    <div class="decision">
+      如果这版整体结构没问题，下一步我就按它写正式设计说明，然后进入实现。
+    </div>
+  </div>
+</div>

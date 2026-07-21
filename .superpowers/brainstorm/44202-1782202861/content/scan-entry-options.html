@@ -1,0 +1,459 @@
+<style>
+  .intro {
+    margin-bottom: 22px;
+  }
+
+  .intro p {
+    max-width: 980px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .card {
+    overflow: hidden;
+  }
+
+  .card-image {
+    padding: 18px;
+    background:
+      linear-gradient(180deg, #f7faff, #edf3fb);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  }
+
+  .workbench {
+    height: 360px;
+    padding: 14px;
+    border-radius: 22px;
+    background:
+      linear-gradient(180deg, #eef4fb 0%, #e8eef7 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr) 142px;
+    gap: 12px;
+  }
+
+  .left-rail,
+  .right-rail,
+  .table-shell,
+  .floating-sheet,
+  .bottom-sheet {
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+  }
+
+  .left-rail,
+  .right-rail {
+    border-radius: 20px;
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .left-rail::before,
+  .left-rail::after,
+  .rail-chip,
+  .rail-button {
+    content: "";
+    display: block;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #ffffff, #f4f7fc);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+  }
+
+  .rail-chip {
+    height: 36px;
+    background: linear-gradient(135deg, #6e93ff, #507cff);
+  }
+
+  .rail-button {
+    height: 48px;
+  }
+
+  .table-shell {
+    position: relative;
+    border-radius: 24px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .table-top {
+    height: 38px;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #ffffff, #f6f9fd);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+
+  .table-action {
+    min-width: 76px;
+    height: 28px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #7aa0ff, #5f83ff);
+  }
+
+  .table-head {
+    height: 36px;
+    border-radius: 12px;
+    background:
+      linear-gradient(90deg, rgba(226, 234, 245, 0.9) 0 10%, rgba(226, 234, 245, 0.72) 10% 18%, rgba(226, 234, 245, 0.9) 18% 28%, rgba(226, 234, 245, 0.72) 28% 38%, rgba(226, 234, 245, 0.9) 38% 46%, rgba(226, 234, 245, 0.72) 46% 56%, rgba(226, 234, 245, 0.9) 56% 68%, rgba(226, 234, 245, 0.72) 68% 78%, rgba(226, 234, 245, 0.9) 78% 88%, rgba(226, 234, 245, 0.72) 88% 100%);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .table-body {
+    flex: 1;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 254, 0.98));
+    position: relative;
+  }
+
+  .table-body::before {
+    content: "批量检测表格主区域";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .right-rail {
+    justify-content: space-between;
+  }
+
+  .right-rail-top {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .check-line,
+  .right-button {
+    height: 18px;
+    border-radius: 9px;
+    background: rgba(226, 234, 245, 0.95);
+  }
+
+  .right-button {
+    height: 42px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #7ea4ff, #6186ff);
+  }
+
+  .floating-sheet {
+    position: absolute;
+    top: 58px;
+    right: 14px;
+    width: 180px;
+    height: 228px;
+    border-radius: 20px;
+    padding: 12px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 253, 0.98));
+  }
+
+  .sheet-title,
+  .sheet-field,
+  .sheet-button,
+  .sheet-note {
+    border-radius: 12px;
+    background: rgba(226, 234, 245, 0.9);
+  }
+
+  .sheet-title {
+    height: 16px;
+    width: 88px;
+    margin-bottom: 12px;
+  }
+
+  .sheet-field {
+    height: 40px;
+    margin-bottom: 10px;
+  }
+
+  .sheet-note {
+    height: 52px;
+    margin-bottom: 14px;
+  }
+
+  .sheet-button {
+    height: 36px;
+    background: linear-gradient(135deg, #7ea4ff, #6186ff);
+  }
+
+  .bottom-sheet {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    height: 116px;
+    border-radius: 20px;
+    padding: 12px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 248, 253, 0.98));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 132px;
+    gap: 12px;
+  }
+
+  .bottom-sheet-left {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .bottom-sheet-left div,
+  .bottom-sheet-right div {
+    border-radius: 12px;
+    background: rgba(226, 234, 245, 0.92);
+  }
+
+  .bottom-sheet-left div:nth-child(1),
+  .bottom-sheet-left div:nth-child(2) {
+    height: 40px;
+  }
+
+  .bottom-sheet-left div:nth-child(3),
+  .bottom-sheet-left div:nth-child(4) {
+    height: 38px;
+  }
+
+  .bottom-sheet-right {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .bottom-sheet-right div:nth-child(1) {
+    flex: 1;
+  }
+
+  .bottom-sheet-right div:nth-child(2) {
+    height: 34px;
+    background: linear-gradient(135deg, #7ea4ff, #6186ff);
+  }
+
+  .card-body h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(92, 124, 250, 0.12);
+    color: #4867d9;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+</style>
+
+<div class="intro">
+  <h2>第三版工作台：扫描入口放哪里更顺手？</h2>
+  <p class="subtitle">
+    这三种都已经去掉第二版的顶部大横幅、路径工具条、统计卡片和下面那组三栏面板。
+    主界面只保留“大检测台”，区别只在扫描入口的打开方式。
+  </p>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="workbench">
+        <div class="left-rail">
+          <div class="rail-chip"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+        </div>
+        <div class="table-shell">
+          <div class="table-top">
+            <span>状态总览 / 在线 / 掉线 / 用时</span>
+            <div class="table-action"></div>
+          </div>
+          <div class="table-head"></div>
+          <div class="table-body"></div>
+          <div class="floating-sheet">
+            <div class="sheet-title"></div>
+            <div class="sheet-field"></div>
+            <div class="sheet-field"></div>
+            <div class="sheet-note"></div>
+            <div class="sheet-button"></div>
+          </div>
+        </div>
+        <div class="right-rail">
+          <div class="right-rail-top">
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+          </div>
+          <div class="right-button"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>右上按钮 + 右侧抽屉 <span class="tag">推荐</span></h3>
+      <p>扫描入口挂在表格顶栏右上角，点开后从右侧滑出抽屉。主工作台完整保留，视觉最干净。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>最像专业工作台，不打断表格阅读</li>
+            <li>路径输入、拖拽、扫描设置都能收进抽屉</li>
+            <li>适合后续继续扩展高级扫描参数</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>代价</h4>
+          <ul>
+            <li>第一次进入时入口相对更隐蔽一点</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="workbench">
+        <div class="left-rail">
+          <div class="rail-chip"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+        </div>
+        <div class="table-shell">
+          <div class="table-top">
+            <span>状态总览 / 在线 / 掉线 / 用时</span>
+            <div class="table-action"></div>
+          </div>
+          <div class="table-head"></div>
+          <div class="table-body"></div>
+          <div class="floating-sheet" style="left:50%; right:auto; top:86px; transform:translateX(-50%); width:220px; height:198px;"></div>
+        </div>
+        <div class="right-rail">
+          <div class="right-rail-top">
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+          </div>
+          <div class="right-button"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>右上按钮 + 居中弹窗</h3>
+      <p>扫描入口也放在工作台顶栏，但打开后用居中弹窗完成路径输入和扫描。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>入口直觉，弹窗适合一次性操作</li>
+            <li>实现简单，页面结构最稳</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>代价</h4>
+          <ul>
+            <li>会盖住表格核心区域</li>
+            <li>后续参数一多，弹窗会显得拥挤</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="workbench">
+        <div class="left-rail">
+          <div class="rail-chip"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+          <div class="rail-button"></div>
+        </div>
+        <div class="table-shell">
+          <div class="table-top">
+            <span>状态总览 / 在线 / 掉线 / 用时</span>
+            <div class="table-action"></div>
+          </div>
+          <div class="table-head"></div>
+          <div class="table-body"></div>
+          <div class="bottom-sheet">
+            <div class="bottom-sheet-left">
+              <div></div>
+              <div></div>
+              <div></div>
+              <div></div>
+            </div>
+            <div class="bottom-sheet-right">
+              <div></div>
+              <div></div>
+            </div>
+          </div>
+        </div>
+        <div class="right-rail">
+          <div class="right-rail-top">
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+            <div class="check-line"></div>
+          </div>
+          <div class="right-button"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>表格底部操作抽屉</h3>
+      <p>保持整页极简，扫描入口藏在表格底边，点开后从底部升起操作层。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优点</h4>
+          <ul>
+            <li>页面最整洁，桌面感强</li>
+            <li>横向空间利用高</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>代价</h4>
+          <ul>
+            <li>不如右侧抽屉自然</li>
+            <li>会挤压表格底部可视区域</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
