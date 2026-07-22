@@ -12,6 +12,14 @@ import {
   type ToutiaoDetectionOptions,
 } from "./batch-options";
 import {
+  formatStepTimings,
+  mapWithConcurrency,
+  measureAsyncStep,
+  resolveBalancedWorkerCount,
+  type DetectionStepTimings,
+  type TimedOutcome,
+} from "./batch-performance";
+import {
   formatDetectionDuration,
   formatToutiaoTokenStatus,
   getDetectionStatusLabel,
@@ -235,6 +243,7 @@ type BatchDetectionRow = {
   normalFunctions: string;
   limitedFunctions: string;
   durationMs: number | null;
+  stepTimings: DetectionStepTimings;
   status: "pending" | "checking" | "online" | "offline" | "failed" | "skipped";
   error?: string | null;
 };
@@ -395,7 +404,9 @@ const DetectorRow = memo(function DetectorRow({
       <td>{row.likedCount}</td>
       <td>{row.tokenStatus}</td>
       <td>{row.passwordStatus}</td>
-      <td>{formatDetectionDuration(row.durationMs)}</td>
+      <td title={formatStepTimings(row.stepTimings)}>
+        {formatDetectionDuration(row.durationMs)}
+      </td>
       <td>{row.limitedFunctions || "-"}</td>
       <td>{row.normalFunctions || "-"}</td>
     </tr>
@@ -1373,9 +1384,7 @@ function App() {
     batchFlushPending.current = false;
     setStatus(platform === "douyin" ? "抖音批量检测开始..." : "今日头条批量检测开始...");
     let nextRowIndex = 0;
-    const cpuCores = navigator.hardwareConcurrency ?? 4;
-    const maxConcurrency = Math.min(20, Math.max(4, cpuCores * 2));
-    const workerCount = Math.min(initialRows.length, maxConcurrency);
+    const workerCount = resolveBalancedWorkerCount(initialRows.length, navigator.hardwareConcurrency);
     setStatus(`批量检测开始，包数 ${initialRows.length}，并发 ${workerCount} 路...`);
     async function runWorker() {
       while (!batchStopRef.current) {
@@ -1435,7 +1444,7 @@ function App() {
       "序号", "状态", "APP", "Token状态", "Token", "密码状态", "儿童锁", "实名状态",
       "aid", "账号", "绑定", "头条", "头条platform_screen_name", "QQ", "QQplatform_screen_name", "谷歌", "谷歌platform_screen_name",
       "ID", "IDplatform_screen_name", "微信", "微信platform_screen_name", "sec_uid", "uid", "unique_id", "手机号", "注册时间", "作品数", "关注数", "点赞数",
-      "正常功能", "限制功能", "用时(ms)", "来源ZIP", "错误",
+      "正常功能", "限制功能", "用时(ms)", "分步耗时", "来源ZIP", "错误",
     ];
     const csvRows = rows.map((row, index) => {
       const tokenMatch = row.fullParams?.match(/x-tt-token=([^;\n\r]+)/);
@@ -1473,6 +1482,7 @@ function App() {
         row.normalFunctions,
         row.limitedFunctions,
         row.durationMs ?? "",
+        formatStepTimings(row.stepTimings),
         formatBaseName(row.sourceZip),
         row.error ?? "",
       ];
@@ -1761,6 +1771,7 @@ function App() {
       ["限制功能", selectedBatchRow.limitedFunctions || "-"],
       ["来源 ZIP", formatBaseName(selectedBatchRow.sourceZip)],
       ["用时", selectedBatchRow.durationMs == null ? "-" : `${selectedBatchRow.durationMs} ms`],
+      ["分步耗时", formatStepTimings(selectedBatchRow.stepTimings)],
     ] as const;
 
     return (
@@ -2449,6 +2460,7 @@ function buildInitialBatchRows(apps: AppSummary[], appTypeFilter: DetectionPlatf
         normalFunctions: "",
         limitedFunctions: "",
         durationMs: null,
+        stepTimings: {},
         status: "pending",
         error: null,
       };
@@ -2460,6 +2472,8 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
   const normalFunctions: string[] = [];
   const limitedFunctions: string[] = [];
   const errors: string[] = [];
+  const stepTimings: DetectionStepTimings = {};
+  let douyinCredentials: DouyinAccountCredentialResult | null = null;
   let accountName = row.accountName;
   let secUid = row.secUid;
   let uid = row.uid;
@@ -2490,28 +2504,32 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
   const shouldFetchDouyinSession = row.appType === "douyin" && (options.password || options.registrationTime);
 
   if (row.appType === "douyin") {
-    try {
-      const requestParams = await invoke<DouyinRequestParamsResult>("extract_douyin_request_params", { zipPath: row.sourceZip });
+    const localPreparationStartedAt = performance.now();
+    const [requestParamsOutcome, credentialsOutcome] = await Promise.all([
+      measureAsyncStep(() => invoke<DouyinRequestParamsResult>("extract_douyin_request_params", { zipPath: row.sourceZip })),
+      measureAsyncStep(() => invoke<DouyinAccountCredentialResult>("extract_douyin_account_credentials", { zipPath: row.sourceZip })),
+    ]);
+    stepTimings.localPreparation = Math.round(performance.now() - localPreparationStartedAt);
+
+    if (requestParamsOutcome.status === "fulfilled") {
+      const requestParams = requestParamsOutcome.value;
       fullParams = requestParams.headerText || "-";
       secUid = requestParams.secUserId?.trim() || secUid;
-    } catch (error) {
-      fullParams = `提取失败：${String(error)}`;
+    } else {
+      fullParams = `提取失败：${String(requestParamsOutcome.reason)}`;
       errors.push(fullParams);
     }
 
-    try {
-      const creds = await invoke<DouyinAccountCredentialResult>("extract_douyin_account_credentials", { zipPath: row.sourceZip });
-      if (creds.accounts && creds.accounts.length > 0) {
-        const uids = creds.accounts.map(a => a.uid || "-").filter(Boolean);
-        const secUids = creds.accounts.map(a => a.secUid || "-").filter(Boolean);
-        const uniqueIds = creds.accounts.map(a => a.uniqueId || a.shortId || "-").filter(Boolean);
-        const nicknames = creds.accounts.map(a => a.nickname || "未实名").filter(Boolean);
-        const currentLocalAccount = creds.accounts.find((account) => account.isCurrent) || (creds.accounts.length === 1 ? creds.accounts[0] : null);
-        
-        uid = dedupeText(uids).join(" | ");
-        secUid = dedupeText(secUids).join(" | ");
-        uniqueId = dedupeText(uniqueIds).join(" | ");
-        accountName = dedupeText(nicknames).join(" | ");
+    if (credentialsOutcome.status === "fulfilled") {
+      douyinCredentials = credentialsOutcome.value;
+      const accounts = douyinCredentials.accounts || [];
+      if (accounts.length > 0) {
+        const currentLocalAccount = accounts.find((account) => account.isCurrent)
+          || (accounts.length === 1 ? accounts[0] : null);
+        uid = dedupeText(accounts.map((account) => account.uid || "-")).join(" | ");
+        secUid = dedupeText(accounts.map((account) => account.secUid || "-")).join(" | ");
+        uniqueId = dedupeText(accounts.map((account) => account.uniqueId || account.shortId || "-")).join(" | ");
+        accountName = dedupeText(accounts.map((account) => account.nickname || "未实名")).join(" | ");
         if (currentLocalAccount) {
           uid = currentLocalAccount.uid || uid;
           secUid = currentLocalAccount.secUid || secUid;
@@ -2536,12 +2554,30 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
           normalFunctions.push(...currentLocalAccount.normalFunctions);
         }
       }
-    } catch (error) {
-      // ignore or log
+    } else {
+      errors.push(`抖音账号凭据提取失败：${String(credentialsOutcome.reason)}`);
     }
 
-    if (options.token) {
-      const tokenResult = await invoke<DouyinTokenStatusResult>("check_douyin_token_status", { zipPath: row.sourceZip });
+    const tokenTask: Promise<TimedOutcome<DouyinTokenStatusResult> | null> = options.token
+      ? measureAsyncStep(() => invoke<DouyinTokenStatusResult>("check_douyin_token_status", { zipPath: row.sourceZip }))
+      : Promise.resolve(null);
+    const passwordTask: Promise<TimedOutcome<DouyinPasswordStatusResult> | null> = shouldFetchDouyinSession
+      ? measureAsyncStep(() => invoke<DouyinPasswordStatusResult>("check_douyin_password_status", { zipPath: row.sourceZip }))
+      : Promise.resolve(null);
+    const certificationTask: Promise<TimedOutcome<DouyinCertificationStatusResult> | null> = options.certification
+      ? measureAsyncStep(() => invoke<DouyinCertificationStatusResult>("check_douyin_certification_status", { zipPath: row.sourceZip }))
+      : Promise.resolve(null);
+    const [tokenOutcome, passwordOutcome, certificationOutcome] = await Promise.all([
+      tokenTask,
+      passwordTask,
+      certificationTask,
+    ]);
+    if (tokenOutcome) stepTimings.token = tokenOutcome.durationMs;
+    if (passwordOutcome) stepTimings.password = passwordOutcome.durationMs;
+    if (certificationOutcome) stepTimings.certification = certificationOutcome.durationMs;
+
+    if (tokenOutcome?.status === "fulfilled") {
+      const tokenResult = tokenOutcome.value;
       tokenStatus = formatDouyinTokenLabel(tokenResult);
       const endpointAccount = tokenResult.endpoints.find((endpoint) => endpoint.nickname || endpoint.uid);
       accountName = endpointAccount?.nickname || endpointAccount?.uid || accountName || "未实名";
@@ -2553,13 +2589,14 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
       followingCount = firstEndpointValue(tokenResult.endpoints, "followingCount") || followingCount;
       likedCount = firstEndpointValue(tokenResult.endpoints, "likedCount") || likedCount;
       if (secUid && secUid !== "-" && (!uid || uid === "-" || !uniqueId || uniqueId === "-")) {
-        try {
-          const identityResult = await invoke<DouyinUniqueIdResult>("resolve_douyin_unique_id", { secUid });
-          secUid = identityResult.secUid || secUid;
-          uid = identityResult.uid || uid;
-          uniqueId = identityResult.uniqueId || uniqueId;
-        } catch (error) {
-          errors.push(`抖音身份补全失败：${String(error)}`);
+        const identityOutcome = await measureAsyncStep(() => invoke<DouyinUniqueIdResult>("resolve_douyin_unique_id", { secUid }));
+        stepTimings.identity = identityOutcome.durationMs;
+        if (identityOutcome.status === "fulfilled") {
+          secUid = identityOutcome.value.secUid || secUid;
+          uid = identityOutcome.value.uid || uid;
+          uniqueId = identityOutcome.value.uniqueId || uniqueId;
+        } else {
+          errors.push(`抖音身份补全失败：${String(identityOutcome.reason)}`);
         }
       }
       const hasFunctionItems = tokenResult.functions.length > 0;
@@ -2592,8 +2629,8 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
       if (tokenResult.error) errors.push(tokenResult.error);
     }
 
-    if (shouldFetchDouyinSession) {
-      const passwordResult = await invoke<DouyinPasswordStatusResult>("check_douyin_password_status", { zipPath: row.sourceZip });
+    if (passwordOutcome?.status === "fulfilled") {
+      const passwordResult = passwordOutcome.value;
       accountName = passwordResult.accountName || accountName || "未实名";
       registerTime = formatRegisterTime(passwordResult.registerTime) || registerTime;
       bindingSummary = passwordResult.bindings.summary || bindingSummary;
@@ -2619,8 +2656,8 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
       }
     }
 
-    if (options.certification) {
-      const certificationResult = await invoke<DouyinCertificationStatusResult>("check_douyin_certification_status", { zipPath: row.sourceZip });
+    if (certificationOutcome?.status === "fulfilled") {
+      const certificationResult = certificationOutcome.value;
       certificationStatus = formatDouyinCertificationLabel(certificationResult);
       accountName = certificationResult.accountName || accountName || "未实名";
       if (certificationResult.isVerified === true) {
@@ -2631,43 +2668,64 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
         errors.push(certificationResult.error);
       }
     }
+
+    if (tokenOutcome?.status === "rejected") {
+      tokenStatus = "请求失败";
+      limitedFunctions.push("Token 请求失败");
+      errors.push(`douyin_token_command_failed: ${String(tokenOutcome.reason)}`);
+    }
+    if (passwordOutcome?.status === "rejected") {
+      if (options.password) passwordStatus = "请求失败";
+      errors.push(`douyin_password_command_failed: ${String(passwordOutcome.reason)}`);
+    }
+    if (certificationOutcome?.status === "rejected") {
+      certificationStatus = "请求失败";
+      errors.push(`douyin_certification_command_failed: ${String(certificationOutcome.reason)}`);
+    }
   } else {
     passwordStatus = "无";
     childLockStatus = "无";
-    if (options.token) {
-      try {
-        const tokenResult = await invoke<ToutiaoTokenStatusResult>("check_toutiao_token_status", { zipPath: row.sourceZip });
-        tokenStatus = formatToutiaoTokenStatus(tokenResult.status);
-        accountName = tokenResult.nickname || accountName;
-        uid = tokenResult.uid || uid;
-        registerTime = formatRegisterTime(tokenResult.registerTime) || registerTime;
-        fullParams = [
-          `app_name=news_article`,
-          `device_id=${tokenResult.deviceId || "-"}`,
-          `aid=13`,
-          `iid=${tokenResult.iid || "-"}`,
-          `detail=my_tabs_v2`,
-          `user_app_id=1128`,
-        ].join("\n");
+    const toutiaoTokenTask: Promise<TimedOutcome<ToutiaoTokenStatusResult> | null> = options.token
+      ? measureAsyncStep(() => invoke<ToutiaoTokenStatusResult>("check_toutiao_token_status", { zipPath: row.sourceZip }))
+      : Promise.resolve(null);
+    const toutiaoCertificationTask: Promise<TimedOutcome<ToutiaoCertificationStatusResult> | null> = options.certification
+      ? measureAsyncStep(() => invoke<ToutiaoCertificationStatusResult>("check_toutiao_certification_status", { zipPath: row.sourceZip }))
+      : Promise.resolve(null);
+    const [toutiaoTokenOutcome, toutiaoCertificationOutcome] = await Promise.all([
+      toutiaoTokenTask,
+      toutiaoCertificationTask,
+    ]);
+    if (toutiaoTokenOutcome) stepTimings.token = toutiaoTokenOutcome.durationMs;
+    if (toutiaoCertificationOutcome) stepTimings.certification = toutiaoCertificationOutcome.durationMs;
 
-        if (tokenResult.status === "ok") {
-          onlineSignal = true;
-          normalFunctions.push("Token 在线", "登录功能");
-        } else if (tokenResult.status === "invalid") {
-          offlineSignal = true;
-          limitedFunctions.push("Token 失效");
-        } else {
-          limitedFunctions.push(tokenStatus);
-        }
-        if (tokenResult.error) errors.push(tokenResult.error);
-      } catch (error) {
-        tokenStatus = "请求失败";
-        limitedFunctions.push("Token 请求失败");
-        errors.push(`toutiao_token_command_failed: ${String(error)}`);
+    if (toutiaoTokenOutcome?.status === "fulfilled") {
+      const tokenResult = toutiaoTokenOutcome.value;
+      tokenStatus = formatToutiaoTokenStatus(tokenResult.status);
+      accountName = tokenResult.nickname || accountName;
+      uid = tokenResult.uid || uid;
+      registerTime = formatRegisterTime(tokenResult.registerTime) || registerTime;
+      fullParams = [
+        "app_name=news_article",
+        `device_id=${tokenResult.deviceId || "-"}`,
+        "aid=13",
+        `iid=${tokenResult.iid || "-"}`,
+        "detail=my_tabs_v2",
+        "user_app_id=1128",
+      ].join("\n");
+      if (tokenResult.status === "ok") {
+        onlineSignal = true;
+        normalFunctions.push("Token 在线", "登录功能");
+      } else if (tokenResult.status === "invalid") {
+        offlineSignal = true;
+        limitedFunctions.push("Token 失效");
+      } else {
+        limitedFunctions.push(tokenStatus);
       }
+      if (tokenResult.error) errors.push(tokenResult.error);
     }
-    if (options.certification) {
-      const certificationResult = await invoke<ToutiaoCertificationStatusResult>("check_toutiao_certification_status", { zipPath: row.sourceZip });
+
+    if (toutiaoCertificationOutcome?.status === "fulfilled") {
+      const certificationResult = toutiaoCertificationOutcome.value;
       certificationStatus = formatToutiaoCertificationLabel(certificationResult);
       if (certificationResult.isVerified === true) {
         onlineSignal = true;
@@ -2678,6 +2736,16 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
       } else if (certificationResult.error) {
         errors.push(certificationResult.error);
       }
+    }
+
+    if (toutiaoTokenOutcome?.status === "rejected") {
+      tokenStatus = "请求失败";
+      limitedFunctions.push("Token 请求失败");
+      errors.push(`toutiao_token_command_failed: ${String(toutiaoTokenOutcome.reason)}`);
+    }
+    if (toutiaoCertificationOutcome?.status === "rejected") {
+      certificationStatus = "请求失败";
+      errors.push(`toutiao_certification_command_failed: ${String(toutiaoCertificationOutcome.reason)}`);
     }
   }
 
@@ -2716,174 +2784,175 @@ async function runBatchDetectionForRow(row: BatchDetectionRow, options: BatchDet
     certificationStatus,
     normalFunctions: dedupeText(normalFunctions).join("｜"),
     limitedFunctions: dedupeText(limitedFunctions).join("｜"),
+    stepTimings: { ...stepTimings },
     status,
     error: errors.join("；") || null,
   };
 
-  if (row.appType === "douyin") {
-    try {
-      const creds = await invoke<DouyinAccountCredentialResult>("extract_douyin_account_credentials", { zipPath: row.sourceZip });
-      if (creds.accounts && creds.accounts.length > 1) {
-        const activeUid = creds.accounts.find((account) => account.isCurrent)?.uid || (baseRow.uid !== "-" && !baseRow.uid.includes(" | ") ? baseRow.uid : null);
-        const mappedRows = await Promise.all(creds.accounts.map(async (acc) => {
-          const isCurrent = acc.isCurrent || acc.uid === activeUid;
-          const accHasActToken = isActStyleToken(acc.accessToken);
-          const shouldFetchSessionDetails = options.password || options.registrationTime;
-          let accTokenStatus = isCurrent ? baseRow.tokenStatus : (options.token ? "未知(非当前)" : "跳过");
-          let accFullParams = isCurrent ? baseRow.fullParams : "-";
-          let accPasswordStatus = isCurrent ? baseRow.passwordStatus : (options.password ? "未知(非当前)" : "跳过");
-          let accAccountName = acc.nickname || (isCurrent ? baseRow.accountName : "未实名");
-          let accBindingSummary = acc.bindings.summary || (isCurrent ? baseRow.bindingSummary : "-");
-          let accToutiaoBinding = acc.bindings.toutiao || (isCurrent ? baseRow.toutiaoBinding : "-");
-          let accToutiaoPlatformScreenName = acc.bindings.toutiaoPlatformScreenName || (isCurrent ? baseRow.toutiaoPlatformScreenName : "-");
-          let accQqBinding = acc.bindings.qq || (isCurrent ? baseRow.qqBinding : "-");
-          let accQqPlatformScreenName = acc.bindings.qqPlatformScreenName || (isCurrent ? baseRow.qqPlatformScreenName : "-");
-          let accGoogleBinding = acc.bindings.google || (isCurrent ? baseRow.googleBinding : "-");
-          let accGooglePlatformScreenName = acc.bindings.googlePlatformScreenName || (isCurrent ? baseRow.googlePlatformScreenName : "-");
-          let accAppleIdBinding = acc.bindings.appleId || (isCurrent ? baseRow.appleIdBinding : "-");
-          let accAppleIdPlatformScreenName = acc.bindings.appleIdPlatformScreenName || (isCurrent ? baseRow.appleIdPlatformScreenName : "-");
-          let accWechatBinding = acc.bindings.wechat || (isCurrent ? baseRow.wechatBinding : "-");
-          let accWechatPlatformScreenName = acc.bindings.wechatPlatformScreenName || (isCurrent ? baseRow.wechatPlatformScreenName : "-");
-          let accUid = acc.uid || "-";
-          let accSecUid = acc.secUid || "-";
-          let accUniqueId = acc.uniqueId || acc.shortId || "-";
-          let accPhoneNumber = acc.phoneNumber || (isCurrent ? baseRow.phoneNumber : "-");
-          let accRegisterTime = formatRegisterTime(acc.registerTime) || (isCurrent ? baseRow.registerTime : "-");
-          let accAwemeCount = acc.awemeCount || (isCurrent ? baseRow.awemeCount : "-");
-          let accFollowingCount = acc.followingCount || (isCurrent ? baseRow.followingCount : "-");
-          let accLikedCount = acc.likedCount || (isCurrent ? baseRow.likedCount : "-");
-          const accNormalFunctions = isCurrent ? splitDisplayText(baseRow.normalFunctions) : [...acc.normalFunctions];
-          const accLimitedFunctions = isCurrent ? splitDisplayText(baseRow.limitedFunctions) : [];
-          
-          if (!isCurrent) {
-            if (!acc.accessToken) {
-              accFullParams = "-";
-            } else if (accHasActToken) {
-              accFullParams = "跳过(act token)";
-              if (options.token) {
-                accTokenStatus = "跳过(act token)";
-              }
-            } else {
-              try {
-                const requestParams = await invoke<DouyinRequestParamsResult>("extract_douyin_request_params", {
-                  zipPath: row.sourceZip,
-                  tokenOverride: acc.accessToken
-                });
-                accFullParams = requestParams.headerText || "-";
-                if (requestParams.secUserId) {
-                  accSecUid = requestParams.secUserId.trim();
-                }
-              } catch (error) {
-                accFullParams = `提取失败：${String(error)}`;
-              }
-              if (options.token && acc.accessToken) {
-                try {
-                  const tr = await invoke<DouyinTokenStatusResult>("check_douyin_token_status", {
-                    zipPath: row.sourceZip,
-                    tokenOverride: acc.accessToken
-                  });
-                  accTokenStatus = formatDouyinTokenLabel(tr);
-                  accPhoneNumber = tr.localPhoneNumber || accPhoneNumber;
-                  for (const fn of tr.functions) {
-                    if (fn.funcAvailable) {
-                      accNormalFunctions.push(fn.funcName);
-                    } else {
-                      accLimitedFunctions.push(fn.funcName);
-                    }
-                  }
-                  if (tr.validEndpointCount > 0) {
-                    const validEndpoint = tr.endpoints.find(e => e.status === "ok");
-                    if (validEndpoint) {
-                      if (validEndpoint.uid) accUid = validEndpoint.uid;
-                      if (validEndpoint.secUid) accSecUid = validEndpoint.secUid;
-                      if (validEndpoint.nickname) accAccountName = validEndpoint.nickname;
-                      if (validEndpoint.phoneNumber) accPhoneNumber = validEndpoint.phoneNumber;
-                      if (validEndpoint.registerTime) accRegisterTime = formatRegisterTime(validEndpoint.registerTime) || accRegisterTime;
-                      if (validEndpoint.awemeCount !== null) accAwemeCount = String(validEndpoint.awemeCount);
-                      if (validEndpoint.followingCount !== null) accFollowingCount = String(validEndpoint.followingCount);
-                      if (validEndpoint.likedCount !== null) accLikedCount = String(validEndpoint.likedCount);
-                    }
-                  }
-                  if (tr.status === "invalid" && tr.functions.length === 0) {
-                    accLimitedFunctions.push("Token 失效");
-                  } else if (tr.status.startsWith("missing_") && tr.functions.length === 0) {
-                    accLimitedFunctions.push("Token 缺参数");
-                  }
-                } catch (e) {
-                  // ignore
-                }
-              }
-            }
-          }
+  if (row.appType === "douyin" && douyinCredentials?.accounts.length && douyinCredentials.accounts.length > 1) {
+    const multiAccountStartedAt = performance.now();
+    const activeUid = douyinCredentials.accounts.find((account) => account.isCurrent)?.uid
+      || (baseRow.uid !== "-" && !baseRow.uid.includes(" | ") ? baseRow.uid : null);
+    const mappedRows = await mapWithConcurrency(douyinCredentials.accounts, 2, async (acc) => {
+      const isCurrent = acc.isCurrent || acc.uid === activeUid;
+      if (isCurrent) return baseRow;
 
-          if (!isCurrent && acc.sessionId && shouldFetchSessionDetails) {
-            try {
-              const pr = await invoke<DouyinPasswordStatusResult>("check_douyin_password_status", { 
-                zipPath: row.sourceZip, 
-                sessionIdOverride: acc.sessionId 
-              });
-              if (options.password) {
-                accPasswordStatus = formatDouyinPasswordLabel(pr);
-                if (pr.hasPassword === true) {
-                  accNormalFunctions.push("改密功能");
-                } else if (pr.hasPassword === false) {
-                  accLimitedFunctions.push("未设置密码");
-                }
-              }
-              if (pr.accountName) accAccountName = pr.accountName;
-              if (pr.registerTime) accRegisterTime = formatRegisterTime(pr.registerTime) || accRegisterTime;
-              if (pr.bindings.summary) accBindingSummary = pr.bindings.summary;
-              if (pr.bindings.toutiao) accToutiaoBinding = pr.bindings.toutiao;
-              if (pr.bindings.toutiaoPlatformScreenName) accToutiaoPlatformScreenName = pr.bindings.toutiaoPlatformScreenName;
-              if (pr.bindings.qq) accQqBinding = pr.bindings.qq;
-              if (pr.bindings.qqPlatformScreenName) accQqPlatformScreenName = pr.bindings.qqPlatformScreenName;
-              if (pr.bindings.google) accGoogleBinding = pr.bindings.google;
-              if (pr.bindings.googlePlatformScreenName) accGooglePlatformScreenName = pr.bindings.googlePlatformScreenName;
-              if (pr.bindings.appleId) accAppleIdBinding = pr.bindings.appleId;
-              if (pr.bindings.appleIdPlatformScreenName) accAppleIdPlatformScreenName = pr.bindings.appleIdPlatformScreenName;
-              if (pr.bindings.wechat) accWechatBinding = pr.bindings.wechat;
-              if (pr.bindings.wechatPlatformScreenName) accWechatPlatformScreenName = pr.bindings.wechatPlatformScreenName;
-            } catch (e) {
-              // ignore
-            }
-          }
+      const accHasActToken = isActStyleToken(acc.accessToken);
+      const shouldFetchSessionDetails = options.password || options.registrationTime;
+      let accTokenStatus = options.token ? "未知(非当前)" : "跳过";
+      let accFullParams = "-";
+      let accPasswordStatus = options.password ? "未知(非当前)" : "跳过";
+      let accAccountName = acc.nickname || "未实名";
+      let accBindingSummary = acc.bindings.summary || "-";
+      let accToutiaoBinding = acc.bindings.toutiao || "-";
+      let accToutiaoPlatformScreenName = acc.bindings.toutiaoPlatformScreenName || "-";
+      let accQqBinding = acc.bindings.qq || "-";
+      let accQqPlatformScreenName = acc.bindings.qqPlatformScreenName || "-";
+      let accGoogleBinding = acc.bindings.google || "-";
+      let accGooglePlatformScreenName = acc.bindings.googlePlatformScreenName || "-";
+      let accAppleIdBinding = acc.bindings.appleId || "-";
+      let accAppleIdPlatformScreenName = acc.bindings.appleIdPlatformScreenName || "-";
+      let accWechatBinding = acc.bindings.wechat || "-";
+      let accWechatPlatformScreenName = acc.bindings.wechatPlatformScreenName || "-";
+      let accUid = acc.uid || "-";
+      let accSecUid = acc.secUid || "-";
+      const accUniqueId = acc.uniqueId || acc.shortId || "-";
+      let accPhoneNumber = acc.phoneNumber || "-";
+      let accRegisterTime = formatRegisterTime(acc.registerTime) || "-";
+      let accAwemeCount = acc.awemeCount || "-";
+      let accFollowingCount = acc.followingCount || "-";
+      let accLikedCount = acc.likedCount || "-";
+      const accNormalFunctions = [...acc.normalFunctions];
+      const accLimitedFunctions: string[] = [];
 
-          return {
-            ...baseRow,
-            fullParams: accFullParams,
-            accountName: accAccountName,
-            bindingSummary: accBindingSummary,
-            toutiaoBinding: accToutiaoBinding,
-            toutiaoPlatformScreenName: accToutiaoPlatformScreenName,
-            qqBinding: accQqBinding,
-            qqPlatformScreenName: accQqPlatformScreenName,
-            googleBinding: accGoogleBinding,
-            googlePlatformScreenName: accGooglePlatformScreenName,
-            appleIdBinding: accAppleIdBinding,
-            appleIdPlatformScreenName: accAppleIdPlatformScreenName,
-            wechatBinding: accWechatBinding,
-            wechatPlatformScreenName: accWechatPlatformScreenName,
-            uid: accUid,
-            secUid: accSecUid,
-            uniqueId: accUniqueId,
-            phoneNumber: accPhoneNumber,
-            registerTime: accRegisterTime,
-            awemeCount: accAwemeCount,
-            followingCount: accFollowingCount,
-            likedCount: accLikedCount,
-            tokenStatus: accTokenStatus,
-            passwordStatus: accPasswordStatus,
-            certificationStatus: isCurrent ? baseRow.certificationStatus : "未知(非当前)",
-            normalFunctions: dedupeText(accNormalFunctions).join("｜"),
-            limitedFunctions: dedupeText(accLimitedFunctions).join("｜"),
-            status: (isCurrent ? baseRow.status : "skipped") as BatchDetectionRow["status"],
-          } as BatchDetectionRow;
-        }));
-        return mappedRows;
+      if (accHasActToken) {
+        accFullParams = "跳过(act token)";
+        if (options.token) accTokenStatus = "跳过(act token)";
       }
-    } catch (error) {
-      // ignore
-    }
+
+      const accountParamsTask: Promise<TimedOutcome<DouyinRequestParamsResult> | null> = acc.accessToken && !accHasActToken
+        ? measureAsyncStep(() => invoke<DouyinRequestParamsResult>("extract_douyin_request_params", {
+            zipPath: row.sourceZip,
+            tokenOverride: acc.accessToken,
+          }))
+        : Promise.resolve(null);
+      const accountTokenTask: Promise<TimedOutcome<DouyinTokenStatusResult> | null> = options.token && acc.accessToken && !accHasActToken
+        ? measureAsyncStep(() => invoke<DouyinTokenStatusResult>("check_douyin_token_status", {
+            zipPath: row.sourceZip,
+            tokenOverride: acc.accessToken,
+          }))
+        : Promise.resolve(null);
+      const accountPasswordTask: Promise<TimedOutcome<DouyinPasswordStatusResult> | null> = acc.sessionId && shouldFetchSessionDetails
+        ? measureAsyncStep(() => invoke<DouyinPasswordStatusResult>("check_douyin_password_status", {
+            zipPath: row.sourceZip,
+            sessionIdOverride: acc.sessionId,
+          }))
+        : Promise.resolve(null);
+      const [accountParamsOutcome, accountTokenOutcome, accountPasswordOutcome] = await Promise.all([
+        accountParamsTask,
+        accountTokenTask,
+        accountPasswordTask,
+      ]);
+
+      if (accountParamsOutcome?.status === "fulfilled") {
+        accFullParams = accountParamsOutcome.value.headerText || "-";
+        if (accountParamsOutcome.value.secUserId) {
+          accSecUid = accountParamsOutcome.value.secUserId.trim();
+        }
+      } else if (accountParamsOutcome?.status === "rejected") {
+        accFullParams = `提取失败：${String(accountParamsOutcome.reason)}`;
+      }
+
+      if (accountTokenOutcome?.status === "fulfilled") {
+        const tokenResult = accountTokenOutcome.value;
+        accTokenStatus = formatDouyinTokenLabel(tokenResult);
+        accPhoneNumber = tokenResult.localPhoneNumber || accPhoneNumber;
+        for (const fn of tokenResult.functions) {
+          if (fn.funcAvailable) accNormalFunctions.push(fn.funcName);
+          else accLimitedFunctions.push(fn.funcName);
+        }
+        if (tokenResult.validEndpointCount > 0) {
+          const endpoint = tokenResult.endpoints.find((item) => item.status === "ok");
+          if (endpoint?.uid) accUid = endpoint.uid;
+          if (endpoint?.secUid) accSecUid = endpoint.secUid;
+          if (endpoint?.nickname) accAccountName = endpoint.nickname;
+          if (endpoint?.phoneNumber) accPhoneNumber = endpoint.phoneNumber;
+          if (endpoint?.registerTime) accRegisterTime = formatRegisterTime(endpoint.registerTime) || accRegisterTime;
+          if (endpoint?.awemeCount != null) accAwemeCount = String(endpoint.awemeCount);
+          if (endpoint?.followingCount != null) accFollowingCount = String(endpoint.followingCount);
+          if (endpoint?.likedCount != null) accLikedCount = String(endpoint.likedCount);
+        }
+        if (tokenResult.status === "invalid" && tokenResult.functions.length === 0) {
+          accLimitedFunctions.push("Token 失效");
+        } else if (tokenResult.status.startsWith("missing_") && tokenResult.functions.length === 0) {
+          accLimitedFunctions.push("Token 缺参数");
+        }
+      } else if (accountTokenOutcome?.status === "rejected") {
+        accTokenStatus = "请求失败";
+        accLimitedFunctions.push("Token 请求失败");
+      }
+
+      if (accountPasswordOutcome?.status === "fulfilled") {
+        const passwordResult = accountPasswordOutcome.value;
+        if (options.password) {
+          accPasswordStatus = formatDouyinPasswordLabel(passwordResult);
+          if (passwordResult.hasPassword === true) accNormalFunctions.push("改密功能");
+          else if (passwordResult.hasPassword === false) accLimitedFunctions.push("未设置密码");
+        }
+        if (passwordResult.accountName) accAccountName = passwordResult.accountName;
+        if (passwordResult.registerTime) accRegisterTime = formatRegisterTime(passwordResult.registerTime) || accRegisterTime;
+        if (passwordResult.bindings.summary) accBindingSummary = passwordResult.bindings.summary;
+        if (passwordResult.bindings.toutiao) accToutiaoBinding = passwordResult.bindings.toutiao;
+        if (passwordResult.bindings.toutiaoPlatformScreenName) accToutiaoPlatformScreenName = passwordResult.bindings.toutiaoPlatformScreenName;
+        if (passwordResult.bindings.qq) accQqBinding = passwordResult.bindings.qq;
+        if (passwordResult.bindings.qqPlatformScreenName) accQqPlatformScreenName = passwordResult.bindings.qqPlatformScreenName;
+        if (passwordResult.bindings.google) accGoogleBinding = passwordResult.bindings.google;
+        if (passwordResult.bindings.googlePlatformScreenName) accGooglePlatformScreenName = passwordResult.bindings.googlePlatformScreenName;
+        if (passwordResult.bindings.appleId) accAppleIdBinding = passwordResult.bindings.appleId;
+        if (passwordResult.bindings.appleIdPlatformScreenName) accAppleIdPlatformScreenName = passwordResult.bindings.appleIdPlatformScreenName;
+        if (passwordResult.bindings.wechat) accWechatBinding = passwordResult.bindings.wechat;
+        if (passwordResult.bindings.wechatPlatformScreenName) accWechatPlatformScreenName = passwordResult.bindings.wechatPlatformScreenName;
+      } else if (accountPasswordOutcome?.status === "rejected" && options.password) {
+        accPasswordStatus = "请求失败";
+        accLimitedFunctions.push("密码请求失败");
+      }
+
+      return {
+        ...baseRow,
+        fullParams: accFullParams,
+        accountName: accAccountName,
+        bindingSummary: accBindingSummary,
+        toutiaoBinding: accToutiaoBinding,
+        toutiaoPlatformScreenName: accToutiaoPlatformScreenName,
+        qqBinding: accQqBinding,
+        qqPlatformScreenName: accQqPlatformScreenName,
+        googleBinding: accGoogleBinding,
+        googlePlatformScreenName: accGooglePlatformScreenName,
+        appleIdBinding: accAppleIdBinding,
+        appleIdPlatformScreenName: accAppleIdPlatformScreenName,
+        wechatBinding: accWechatBinding,
+        wechatPlatformScreenName: accWechatPlatformScreenName,
+        uid: accUid,
+        secUid: accSecUid,
+        uniqueId: accUniqueId,
+        phoneNumber: accPhoneNumber,
+        registerTime: accRegisterTime,
+        awemeCount: accAwemeCount,
+        followingCount: accFollowingCount,
+        likedCount: accLikedCount,
+        tokenStatus: accTokenStatus,
+        passwordStatus: accPasswordStatus,
+        certificationStatus: "未知(非当前)",
+        normalFunctions: dedupeText(accNormalFunctions).join("｜"),
+        limitedFunctions: dedupeText(accLimitedFunctions).join("｜"),
+        status: "skipped" as BatchDetectionRow["status"],
+      };
+    });
+    stepTimings.multiAccount = Math.round(performance.now() - multiAccountStartedAt);
+    return mappedRows.map((mappedRow) => ({
+      ...mappedRow,
+      stepTimings: { ...stepTimings },
+    }));
   }
 
   return [baseRow];
@@ -2910,11 +2979,6 @@ function formatRegisterTime(value?: string | null) {
 
 function dedupeText(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
-}
-
-function splitDisplayText(value?: string | null) {
-  if (!value) return [];
-  return value.split("｜").map((item) => item.trim()).filter(Boolean);
 }
 
 function escapeCsvCell(value: unknown) {

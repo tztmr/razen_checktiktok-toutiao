@@ -317,6 +317,7 @@ struct CacheState {
     scan_cache: BTreeMap<String, ZipScanSummary>,
     files_cache: BTreeMap<String, Vec<CandidateFile>>,
     parse_cache: BTreeMap<String, ParseResult>,
+    app_file_path_indexes: BTreeMap<String, Vec<String>>,
 }
 
 struct BackupManifestContext {
@@ -3248,21 +3249,10 @@ fn build_backup_actual_entry_path(base_dir: &str, file_id: &str) -> Option<Strin
     Some(format!("{base_dir}/{prefix}/{file_id}"))
 }
 
-fn find_app_file_path(
-    zip_path: &str,
-    app_id: &str,
-    suffixes: &[&str],
-) -> Result<Option<String>, String> {
-    let suffixes_lower = suffixes
-        .iter()
-        .map(|value| value.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-
-    if is_backup_directory_source(zip_path)? {
-        return find_app_file_path_in_backup_directory(zip_path, app_id, &suffixes_lower);
-    }
-
+fn build_app_file_path_index(zip_path: &str, app_id: &str) -> Result<Vec<String>, String> {
     let mut archive = open_zip(zip_path)?;
+    let mut paths = Vec::new();
+
     for index in 0..archive.len() {
         let file = archive
             .by_index(index)
@@ -3270,21 +3260,12 @@ fn find_app_file_path(
         if file.is_dir() {
             continue;
         }
-
         let inner_path = normalize_path(file.name());
-        let Some((_, entry_app_id, sandbox_path)) = split_entry_path(&inner_path) else {
+        let Some((_, entry_app_id, _)) = split_entry_path(&inner_path) else {
             continue;
         };
-        if entry_app_id != app_id {
-            continue;
-        }
-
-        let sandbox_lower = sandbox_path.to_ascii_lowercase();
-        if suffixes_lower
-            .iter()
-            .any(|suffix| sandbox_lower.ends_with(suffix))
-        {
-            return Ok(Some(inner_path));
+        if entry_app_id == app_id {
+            paths.push(inner_path);
         }
     }
 
@@ -3300,21 +3281,42 @@ fn find_app_file_path(
         let rows = statement
             .query_map([domain.as_str()], |row| row.get::<_, String>(0))
             .map_err(|error| format!("backup_manifest_query_failed: {error}"))?;
-
         for row in rows {
             let relative_path =
                 row.map_err(|error| format!("backup_manifest_query_failed: {error}"))?;
-            let relative_lower = relative_path.to_ascii_lowercase();
-            if suffixes_lower
-                .iter()
-                .any(|suffix| relative_lower.ends_with(suffix))
-            {
-                return Ok(Some(build_backup_virtual_path(app_id, &relative_path)));
-            }
+            paths.push(build_backup_virtual_path(app_id, &relative_path));
         }
     }
 
-    Ok(None)
+    Ok(paths)
+}
+
+fn find_app_file_path(
+    zip_path: &str,
+    app_id: &str,
+    suffixes: &[&str],
+) -> Result<Option<String>, String> {
+    let suffixes_lower = suffixes
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+
+    if is_backup_directory_source(zip_path)? {
+        return find_app_file_path_in_backup_directory(zip_path, app_id, &suffixes_lower);
+    }
+
+    let zip_cache_key = build_zip_cache_key(zip_path)?;
+    let cache_key = build_app_file_path_index_cache_key(&zip_cache_key, app_id);
+    let paths = get_or_build_app_file_path_index(&cache_key, || {
+        build_app_file_path_index(zip_path, app_id)
+    })?;
+
+    Ok(paths.into_iter().find(|path| {
+        let path_lower = path.to_ascii_lowercase();
+        suffixes_lower
+            .iter()
+            .any(|suffix| path_lower.ends_with(suffix))
+    }))
 }
 
 fn find_app_file_path_in_backup_directory(
@@ -3925,11 +3927,11 @@ fn build_zip_cache_key(zip_path: &str) -> Result<String, String> {
     let modified = metadata
         .modified()
         .map_err(|error| format!("zip_stat_failed: {error}"))?;
-    let modified_seconds = modified
+    let modified_nanos = modified
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("zip_stat_failed: {error}"))?
-        .as_secs();
-    Ok(format!("{zip_path}::{modified_seconds}"))
+        .as_nanos();
+    Ok(format!("{zip_path}::{modified_nanos}"))
 }
 
 fn build_files_cache_key(zip_cache_key: &str, app_id: &str) -> String {
@@ -3938,6 +3940,10 @@ fn build_files_cache_key(zip_cache_key: &str, app_id: &str) -> String {
 
 fn build_parse_cache_key(zip_cache_key: &str, inner_path: &str) -> String {
     format!("{zip_cache_key}::parse::{inner_path}")
+}
+
+fn build_app_file_path_index_cache_key(zip_cache_key: &str, app_id: &str) -> String {
+    format!("{zip_cache_key}::app-file-paths::v1::{app_id}")
 }
 
 fn with_scan_cache_hit(mut summary: ZipScanSummary, cache_hit: bool) -> ZipScanSummary {
@@ -3997,6 +4003,33 @@ fn cache_put_parse(cache_key: String, result: ParseResult) -> Result<(), String>
         .map_err(|_| "cache_lock_failed".to_string())?;
     cache.parse_cache.insert(cache_key, result);
     Ok(())
+}
+
+fn cache_get_app_file_path_index(cache_key: &str) -> Result<Option<Vec<String>>, String> {
+    let cache = CACHE_STATE
+        .lock()
+        .map_err(|_| "cache_lock_failed".to_string())?;
+    Ok(cache.app_file_path_indexes.get(cache_key).cloned())
+}
+
+fn cache_put_app_file_path_index(cache_key: String, paths: Vec<String>) -> Result<(), String> {
+    let mut cache = CACHE_STATE
+        .lock()
+        .map_err(|_| "cache_lock_failed".to_string())?;
+    cache.app_file_path_indexes.insert(cache_key, paths);
+    Ok(())
+}
+
+fn get_or_build_app_file_path_index<F>(cache_key: &str, build: F) -> Result<Vec<String>, String>
+where
+    F: FnOnce() -> Result<Vec<String>, String>,
+{
+    if let Ok(Some(cached)) = cache_get_app_file_path_index(cache_key) {
+        return Ok(cached);
+    }
+    let paths = build()?;
+    let _ = cache_put_app_file_path_index(cache_key.to_string(), paths.clone());
+    Ok(paths)
 }
 
 fn resolve_export_path(
@@ -7255,6 +7288,99 @@ fn douyin_connect_field(connect: &Value, snake: &str, camel: &str) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::io::Write;
+    use std::time::Duration;
+    use zip::write::SimpleFileOptions;
+
+    fn write_test_zip(path: &Path, entries: &[&str]) {
+        let file = File::create(path).expect("create test zip");
+        let mut writer = zip::ZipWriter::new(file);
+        for entry in entries {
+            writer
+                .start_file(*entry, SimpleFileOptions::default())
+                .expect("start test entry");
+            writer.write_all(b"test").expect("write test entry");
+        }
+        writer.finish().expect("finish test zip");
+    }
+
+    #[test]
+    fn reuses_cached_app_file_path_index_without_rebuilding() {
+        let temp_dir = tempdir().expect("tempdir");
+        let cache_key = format!("test-app-index::{}", temp_dir.path().display());
+        let builds = Cell::new(0);
+        let first = get_or_build_app_file_path_index(&cache_key, || {
+            builds.set(builds.get() + 1);
+            Ok(vec!["batch/com.demo.app/Library/demo.plist".to_string()])
+        })
+        .expect("first index");
+        let second = get_or_build_app_file_path_index(&cache_key, || {
+            builds.set(builds.get() + 1);
+            Ok(Vec::new())
+        })
+        .expect("cached index");
+
+        assert_eq!(builds.get(), 1);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn app_file_path_cache_key_separates_apps() {
+        assert_ne!(
+            build_app_file_path_index_cache_key("sample.zip::123", "com.demo.one"),
+            build_app_file_path_index_cache_key("sample.zip::123", "com.demo.two"),
+        );
+    }
+
+    #[test]
+    fn zip_cache_key_changes_after_file_modification() {
+        let temp_dir = tempdir().expect("tempdir");
+        let zip_path = temp_dir.path().join("sample.zip");
+        fs::write(&zip_path, b"one").expect("initial file");
+        let first = build_zip_cache_key(zip_path.to_string_lossy().as_ref()).expect("first key");
+        std::thread::sleep(Duration::from_millis(5));
+        fs::write(&zip_path, b"two-two").expect("modified file");
+        let second = build_zip_cache_key(zip_path.to_string_lossy().as_ref()).expect("second key");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn finds_multiple_suffixes_from_one_zip_app_index() {
+        let temp_dir = tempdir().expect("tempdir");
+        let zip_path = temp_dir.path().join("apps.zip");
+        write_test_zip(
+            &zip_path,
+            &[
+                "batch/com.demo.app/Library/Preferences/demo.plist",
+                "batch/com.demo.app/Library/Cookies/Cookies.binarycookies",
+                "batch/com.other.app/Library/Preferences/other.plist",
+            ],
+        );
+        let zip_text = zip_path.to_string_lossy();
+
+        let plist = find_app_file_path(
+            zip_text.as_ref(),
+            "com.demo.app",
+            &["Library/Preferences/demo.plist"],
+        )
+        .expect("plist lookup");
+        let cookies = find_app_file_path(
+            zip_text.as_ref(),
+            "com.demo.app",
+            &["Library/Cookies/Cookies.binarycookies"],
+        )
+        .expect("cookie lookup");
+
+        assert_eq!(
+            plist.as_deref(),
+            Some("batch/com.demo.app/Library/Preferences/demo.plist")
+        );
+        assert_eq!(
+            cookies.as_deref(),
+            Some("batch/com.demo.app/Library/Cookies/Cookies.binarycookies")
+        );
+    }
 
     #[test]
     fn allows_only_known_package_target_directories() {
